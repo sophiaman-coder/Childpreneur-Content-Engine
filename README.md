@@ -38,4 +38,10 @@ cd promo && npm install
 npm run wide    # 或 npm run tall
 ```
 
+加國語旁白（輸出 `*-mandarin.mp4`，需要 `pip install gTTS`）：
+
+```bash
+bash promo/add_voiceover.sh
+```
+
 腳本會用虛擬時鐘逐格控制遊戲，記低所有遊戲音效，再用 Web Audio 離線合成聲軌，最後用 ffmpeg 輸出 MP4（需要 Chrome 同 ffmpeg）。
