@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>小老闆大街 — 兒童創業遊戲</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="wrap">
+    <canvas id="screen"></canvas>
+
+    <div id="hud" class="hidden">
+      <div class="hud-box"><span id="hud-day"></span><span id="hud-weather" class="weather"></span></div>
+      <div class="hud-box"><label>現金</label><b id="hud-cash"></b></div>
+      <div class="hud-box"><label>存款</label><b id="hud-savings"></b><label>貸款</label><b id="hud-loan" class="neg"></b></div>
+      <div class="hud-box"><label>聲譽</label><div class="mini-bar rep"><div id="hud-rep-bar"></div></div></div>
+      <div class="hud-box grow"><label>淨資產</label><div class="mini-bar goal"><div id="hud-goal-bar"></div></div><b id="hud-goal"></b></div>
+      <div class="hud-btns">
+        <button id="btn-music"></button><button id="btn-sfx"></button><button id="btn-help">說明</button>
+      </div>
+    </div>
+
+    <div id="biz-bar" class="hidden">
+      <b id="biz-clock">09:00</b><span id="biz-sold"></span><span id="biz-rev"></span><span id="biz-stock"></span>
+      <button id="biz-speed">快進 ×1</button>
+    </div>
+
+    <div id="controls" class="hidden">
+      <button id="btn-action" class="hidden">入去</button>
+    </div>
+
+    <div id="dialog" class="hidden">
+      <canvas id="dialog-portrait" width="48" height="48"></canvas>
+      <div class="dialog-main">
+        <div id="dialog-name"></div>
+        <div id="dialog-text"></div>
+      </div>
+      <div id="dialog-more">▼</div>
+    </div>
+
+    <div id="panel" class="panel hidden">
+      <div class="panel-head"><span id="panel-title"></span><button id="panel-close" aria-label="關閉">×</button></div>
+      <div id="panel-body"></div>
+    </div>
+
+    <div id="toasts"></div>
+
+    <div id="title">
+      <div class="title-card">
+        <div class="logo">
+          <span class="logo-sub">兒童創業模擬遊戲</span>
+          <h1>小老闆大街</h1>
+          <span class="logo-en">LITTLE BOSS STREET</span>
+        </div>
+        <p>由 $100 開始，入貨、定價、宣傳、理財，<br>20 日內將你嘅小店做大做強！</p>
+        <div class="title-form">
+          <label>你嘅名字 <input id="in-name" type="text" maxlength="6" placeholder="阿明"></label>
+          <label>店舖名稱（最多4字）<input id="in-shop" type="text" maxlength="4" placeholder="小老闆"></label>
+        </div>
+        <div class="title-btns">
+          <button id="btn-start" class="primary big">開始新遊戲</button>
+          <button id="btn-continue" class="hidden">繼續</button>
+        </div>
+        <p class="small">適合 9 – 18 歲｜建議開啟聲音</p>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/data.js"></script>
+  <script src="js/audio.js"></script>
+  <script src="js/art.js"></script>
+  <script src="js/game.js"></script>
+</body>
+</html>
