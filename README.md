@@ -28,3 +28,14 @@ python3 -m http.server 8000
 ```
 
 所有美術用 Canvas 逐點繪畫，所有音效同音樂用 Web Audio 即時合成，冇外部素材。進度會自動儲存喺瀏覽器。
+
+### 10 秒宣傳片（`promo/`）
+`promo/output/` 有兩條用真實遊戲畫面錄製嘅宣傳片：橫向 1920×1080，同直向 1080×1920（Reels／Shorts）。重新錄製：
+
+```bash
+cd game && python3 -m http.server 8123 &   # 先開遊戲
+cd promo && npm install
+npm run wide    # 或 npm run tall
+```
+
+腳本會用虛擬時鐘逐格控制遊戲，記低所有遊戲音效，再用 Web Audio 離線合成聲軌，最後用 ffmpeg 輸出 MP4（需要 Chrome 同 ffmpeg）。

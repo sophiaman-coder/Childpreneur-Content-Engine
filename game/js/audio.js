@@ -4,6 +4,7 @@ const Sound = (() => {
   let musicOn = localStorage.getItem('lb_music') !== '0';
   let sfxOn = localStorage.getItem('lb_sfx') !== '0';
   let musicTimer = null, step = 0, nextTime = 0, tempo = 112, track = 'town';
+  let tOffset = 0;
 
   function init() {
     if (ctx) { if (ctx.state === 'suspended') ctx.resume(); return; }
@@ -23,7 +24,7 @@ const Sound = (() => {
 
   function tone(freq, dur, { type = 'square', vol = 0.3, delay = 0, slide = null, bus = sfxBus, attack = 0.005 } = {}) {
     if (!ctx) return;
-    const t = ctx.currentTime + delay;
+    const t = ctx.currentTime + tOffset + delay;
     const o = ctx.createOscillator(), g = ctx.createGain();
     o.type = type;
     o.frequency.setValueAtTime(freq, t);
@@ -37,7 +38,7 @@ const Sound = (() => {
 
   function noise(dur, { vol = 0.2, delay = 0, freq = 2000, type = 'bandpass', bus = sfxBus, when = null } = {}) {
     if (!ctx) return;
-    const t = when !== null ? when : ctx.currentTime + delay;
+    const t = when !== null ? when : ctx.currentTime + tOffset + delay;
     const s = ctx.createBufferSource(); s.buffer = noiseBuf;
     const f = ctx.createBiquadFilter(); f.type = type; f.frequency.value = freq;
     const g = ctx.createGain();
@@ -137,8 +138,37 @@ const Sound = (() => {
     return sfxOn;
   }
 
+  // 離線錄製（宣傳片用）：cues = [{ at, name }]，musicCues = [{ at, track }]
+  async function renderOffline(duration, cues, musicCues, sampleRate = 44100) {
+    const saved = { ctx, master, sfxBus, musicBus, noiseBuf, track, tempo, step };
+    const oc = new OfflineAudioContext(2, Math.ceil(sampleRate * duration), sampleRate);
+    ctx = oc;
+    master = oc.createGain(); master.connect(oc.destination);
+    master.gain.setValueAtTime(0.7, 0);
+    master.gain.setValueAtTime(0.7, duration - 0.6);
+    master.gain.linearRampToValueAtTime(0, duration);
+    sfxBus = oc.createGain(); sfxBus.gain.value = 0.5; sfxBus.connect(master);
+    musicBus = oc.createGain(); musicBus.gain.value = 0.16; musicBus.connect(master);
+    noiseBuf = oc.createBuffer(1, sampleRate, sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    const mc = [...musicCues].sort((a, b) => a.at - b.at);
+    let t = mc.length ? mc[0].at : 0, ci = 0;
+    track = null;
+    while (t < duration) {
+      while (ci < mc.length && mc[ci].at <= t) { if (mc[ci].track) { track = mc[ci].track; tempo = TRACKS[track].tempo; step = 0; } else track = null; ci++; }
+      if (!track) { t = ci < mc.length ? mc[ci].at : duration; continue; }
+      t += scheduleNote(t);
+    }
+    for (const c of cues) { tOffset = c.at; sfx[c.name] && sfx[c.name](); }
+    tOffset = 0;
+    const buf = await oc.startRendering();
+    ({ ctx, master, sfxBus, musicBus, noiseBuf, track, tempo, step } = saved);
+    return buf;
+  }
+
   return {
-    init, play: name => sfx[name] && sfx[name](), setTrack, toggleMusic, toggleSfx,
+    init, renderOffline, play: name => sfx[name] && sfx[name](), setTrack, toggleMusic, toggleSfx,
     get musicOn() { return musicOn; }, get sfxOn() { return sfxOn; },
   };
 })();

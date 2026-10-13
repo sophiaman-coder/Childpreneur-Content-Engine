@@ -1,0 +1,11 @@
+{
+  "name": "little-boss-street-promo",
+  "private": true,
+  "scripts": {
+    "wide": "node make_promo.js wide",
+    "tall": "node make_promo.js tall"
+  },
+  "dependencies": {
+    "puppeteer-core": "^22.15.0"
+  }
+}
