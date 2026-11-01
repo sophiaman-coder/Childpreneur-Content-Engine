@@ -1,7 +1,18 @@
 // 遊戲數據：產品、天氣、事件、升級、廣告、創業知識問答
 const GAME_DAYS = 20;
 const START_CASH = 100;
-const DAILY_RENT = 30;
+// 業主會分階段加租（固定成本上升）
+const RENT_SCHEDULE = [{ day: 1, rent: 30 }, { day: 8, rent: 45 }, { day: 15, rent: 60 }];
+const rentFor = day => RENT_SCHEDULE.filter(r => r.day <= day).pop().rent;
+// 階段目標：喺指定日收舖後檢查淨資產
+const MILESTONES = [
+  { day: 5, target: 350, reward: 50 },
+  { day: 10, target: 900, reward: 100 },
+  { day: 15, target: 1800, reward: 150 },
+  { day: 20, target: 3000, reward: 0 },
+];
+// 每局固定嘅天氣分佈（保證有 3 日落雨，其中一日係颱風）
+const WEATHER_COUNTS = { hot: 4, sunny: 5, cloudy: 5, rain: 3, cold: 3 };
 const GOAL = 3000;
 const STAR_LEVELS = [1500, 3000, 4500];
 
@@ -31,10 +42,10 @@ const WEATHERS = {
 // 每個事件可以影響：traffic(人流)、cost(入貨成本)、ref(客人心目中嘅價錢)、rep(聲譽)
 const EVENTS = [
   { id: 'sports', title: '學校陸運會', text: '附近學校今日搞陸運會，人流大增！', traffic: 1.5 },
-  { id: 'rival', title: '對面開咗新茶檔', text: '有競爭對手平價賣凍檸茶，客人對凍檸茶嘅心目價下跌咗。', ref: { lemontea: 0.8 } },
+  { id: 'hawker', title: '街頭小販', text: '今日有小販喺附近平價賣凍檸茶，客人對凍檸茶嘅心目價暫時下跌。', ref: { lemontea: 0.8 } },
   { id: 'lemon', title: '檸檬失收', text: '今年檸檬失收，凍檸茶入貨成本大升！', cost: { lemontea: 1.5 } },
   { id: 'influencer', title: '網紅打卡', text: '有網紅喺你間舖打卡，你嘅聲譽上升！', rep: 8 },
-  { id: 'typhoon', title: '颱風襲港', text: '颱風來襲，街上冇乜人。可以考慮少入啲貨。', traffic: 0.4 },
+  { id: 'typhoon', title: '颱風襲港', text: '颱風來襲，街上冇乜人。可以考慮少入啲貨。', traffic: 0.4, scheduled: true },
   { id: 'flour', title: '麵粉減價', text: '麵粉同牛油減價，雞蛋仔同菠蘿油成本下降！', cost: { eggwaffle: 0.7, pineapplebun: 0.7 } },
   { id: 'tour', title: '旅行團到訪', text: '有旅行團經過，遊客肯畀多少少錢。', traffic: 1.3, ref: { lemontea: 1.15, eggwaffle: 1.15, pineapplebun: 1.15 } },
   { id: 'festival', title: '街坊節', text: '社區搞街坊節，熱鬧非常！', traffic: 1.4 },
@@ -53,6 +64,77 @@ const ADS = {
   social: { id: 'social', name: '社交媒體廣告', price: 60,  days: 1, boost: 0.35, rep: 3, desc: '今日人流 +35%，聲譽 +3' },
   board:  { id: 'board',  name: '街頭廣告牌',  price: 100, days: 3, boost: 0.40, rep: 0, desc: '連續 3 日人流 +40%' },
 };
+
+// 抉擇事件：每個選擇可以有 cash、rep、mods（持續效果）、insure（保險日數）、gamble（機率結果）
+// mods 類型：cost（入貨成本倍數）、traffic（人流倍數）、ref（客人心目價倍數）、repDaily（每日聲譽）、expense（每日支出）、commission（收入佣金）
+const DILEMMAS = [
+  { id: 'cheaplemon', title: '平價檸檬', text: '供應商話：「呢批檸檬唔係好新鮮，但平三成，你要唔要？」',
+    lesson: '質素同成本之間要取捨。短期慳錢，可能會影響長期聲譽。',
+    options: [
+      { label: '要！平啲好', mods: [{ type: 'cost', id: 'lemontea', mult: 0.7, days: 3, label: '平價檸檬（成本 -30%）' }, { type: 'repDaily', amount: -3, days: 3, label: '品質下降（聲譽每日 -3）' }],
+        result: '凍檸茶成本平咗三成，但客人覺得味道差咗，之後 3 日每日聲譽 -3。' },
+      { label: '唔要，品質緊要', rep: 3, result: '你堅持品質，客人更信任你！聲譽 +3。' },
+    ] },
+  { id: 'charity', title: '社區義賣', text: '社區中心搞義賣幫助有需要嘅家庭，想你捐 $50。',
+    lesson: '「企業社會責任」：回饋社會可以建立品牌形象，但都要量力而為。',
+    options: [
+      { label: '捐 $50', cash: -50, rep: 8, result: '街坊好欣賞你！聲譽 +8。' },
+      { label: '今次唔捐住', result: '冇損失金錢，但錯過咗建立形象嘅機會。' },
+    ] },
+  { id: 'parttime', title: '請兼職', text: '有個中學生想做兼職，每日人工 $25。有佢幫手，可以招呼多兩成客人。請唔請？',
+    lesson: '請人係成本。要計下多咗嘅客帶嚟嘅利潤，夠唔夠付人工。',
+    options: [
+      { label: '請 4 日', mods: [{ type: 'traffic', mult: 1.2, days: 4, label: '兼職幫手（人流 +20%）' }, { type: 'expense', amount: 25, days: 4, label: '兼職人工' }],
+        result: '請咗兼職！之後 4 日人流 +20%，每日人工 $25。' },
+      { label: '唔請', result: '慳返人工，自己搞掂！' },
+    ] },
+  { id: 'kol', title: '網紅合作', text: '網紅「小食少女」話收 $120，幫你拍片宣傳。',
+    lesson: '宣傳要計「投資回報」：多咗嘅利潤要多過宣傳費先值得。',
+    options: [
+      { label: '合作（$120）', cash: -120, rep: 5, mods: [{ type: 'traffic', mult: 1.5, days: 2, label: '網紅效應（人流 +50%）' }], result: '影片爆紅！之後 2 日人流 +50%，聲譽 +5。' },
+      { label: '婉拒', result: '慳返 $120。' },
+    ] },
+  { id: 'delivery', title: '外賣平台', text: '外賣平台邀請你上架：網上客會令人流 +25%，但每蚊收入要抽 15% 佣金。',
+    lesson: '佣金會蠶食利潤。要計清楚多咗嘅生意，扣除佣金後係咪仲抵。',
+    options: [
+      { label: '上架', mods: [{ type: 'traffic', mult: 1.25, days: 99, label: '外賣平台（人流 +25%）' }, { type: 'commission', rate: 0.15, days: 99, label: '平台佣金 15%' }],
+        result: '上架咗！以後人流多咗，但每日收入要畀 15% 佣金。' },
+      { label: '唔上', result: '保持現狀，唔使畀佣金。' },
+    ] },
+  { id: 'newflavor', title: '新口味試驗', text: '你諗到新口味「蜜糖檸檬」，研發要 $60。可能大受歡迎，亦可能冇人鍾意。',
+    lesson: '創新有風險，但成功可以帶嚟競爭優勢。',
+    options: [
+      { label: '試！（$60）', cash: -60, gamble: { p: 0.65,
+        win: { mods: [{ type: 'ref', id: 'lemontea', mult: 1.2, days: 5, label: '新口味熱賣（凍檸茶心目價 +20%）' }], result: '新口味大受歡迎！之後 5 日客人肯為凍檸茶畀多兩成。' },
+        lose: { result: '新口味反應麻麻……今次當學費，下次再試！' } } },
+      { label: '唔試', result: '保持原味，穩陣。' },
+    ] },
+  { id: 'bulkdeal', title: '供應商大優惠', text: '供應商話：「今日一次過畀 $100 訂金，之後 5 日所有貨八五折！」',
+    lesson: '預付可以攞到折扣，但要估吓之後會唔會入夠貨，先回本。',
+    options: [
+      { label: '畀 $100 訂金', cash: -100, mods: [{ type: 'cost', mult: 0.85, days: 5, label: '供應商優惠（全部貨 -15%）' }], result: '之後 5 日所有入貨八五折！' },
+      { label: '唔使喇', result: '保留現金，靈活啲。' },
+    ] },
+];
+
+const INSURANCE = { id: 'insurance', title: '颱風保險', text: '保險經紀話：「颱風季節到喇！$40 買份保險，未來 7 日如果打風，賠你 $200。」',
+  lesson: '保險係用細額支出，轉移大損失嘅風險。冇出事都唔係蝕，係買咗安心。',
+  options: [
+    { label: '買（$40）', cash: -40, insure: 7, result: '買咗保險，打風都唔怕！' },
+    { label: '唔買', result: '慳返 $40，希望唔好打風啦……' },
+  ] };
+const INSURANCE_PAYOUT = 200;
+
+const RIVAL = { id: 'rival', title: '對手開業！', text: '對面開咗間連鎖店「大茶飯」，凍檸茶只賣 $9！客人對凍檸茶嘅心目價會長期下跌。你點應對？',
+  lesson: '面對競爭，可以減價，亦可以做出「差異化」，令客人有理由揀你。',
+  options: [
+    { label: '推出會員印花卡（$80）', cash: -80, rep: 3, mods: [{ type: 'ref', id: 'lemontea', mult: 0.92, days: 99, label: '對手競爭（已應對）' }], result: '熟客儲印花繼續支持你！凍檸茶心目價只跌少少，聲譽 +3。' },
+    { label: '唔使錢，同佢鬥平', mods: [{ type: 'ref', id: 'lemontea', mult: 0.8, days: 99, label: '對手競爭（凍檸茶心目價 -20%）' }], result: '凍檸茶心目價跌咗兩成，記得調整定價！' },
+  ] };
+
+const ORDER_CLIENTS = ['附近小學', '補習社', '公司開會', '教會聚會', '足球隊', '生日派對'];
+const ORDER_PENALTY = 30;
+const CRITIC_PAL = { key: 'critic', hair: '#1e1e2a', jacket: '#2a2a30', pants: '#2a2a30', skin: '#f2c29b', cap: '#c8a040' };
 
 const BANK = { savingRate: 0.01, loanRate: 0.03, maxLoan: 500 };
 

@@ -35,7 +35,41 @@ function newState(name, shopName) {
     boardDays: 0, todayAds: [], weather: 'sunny', event: null, costs: {},
     quizDone: false, learned: [], history: [], totalSold: 0, opened: false, tutorialDone: false,
     lastEvent: null, adSpend: 0,
+    plan: makePlan(), mods: [], pending: [], order: null, insuredUntil: 0,
   };
+}
+
+function shuffle(a) {
+  for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
+  return a;
+}
+
+// 一局 20 日嘅劇本：天氣、颱風、對手、訂單、抉擇、食評家
+function makePlan() {
+  const pool = Object.entries(WEATHER_COUNTS).flatMap(([w, n]) => Array(n).fill(w));
+  let fc;
+  for (;;) {
+    fc = shuffle([...pool]);
+    if (!['sunny', 'cloudy'].includes(fc[0]) || fc[1] === 'rain') continue;
+    if (fc.some((w, i) => i >= 2 && w === fc[i - 1] && w === fc[i - 2])) continue;
+    if (!fc.some((w, i) => w === 'rain' && i + 1 >= 12 && i + 1 <= 18)) continue;
+    if (fc.filter((w, i) => w === 'rain' && i + 1 <= 11).length < 1) continue;
+    break;
+  }
+  const typhoonDay = pick(fc.map((w, i) => (w === 'rain' && i + 1 >= 12 && i + 1 <= 18 ? i + 1 : 0)).filter(Boolean));
+  const days = {};
+  const add = (d, item) => (days[d] = days[d] || []).push(item);
+  const rivalDay = pick([9, 10]);
+  add(rivalDay, { kind: 'rival' });
+  [4, 7, 11, 14, 18].forEach(d => add(d === typhoonDay ? d + 1 : d, { kind: 'order' }));
+  const insDay = Math.max(6, typhoonDay - 4);
+  add(insDay, { kind: 'dilemma', id: 'insurance' });
+  const dIds = shuffle(DILEMMAS.map(d => d.id));
+  const dDays = [5, 8, 12, 16, 19].filter(d => d !== insDay && d !== rivalDay);
+  dDays.forEach((d, i) => add(d, { kind: 'dilemma', id: dIds[i % dIds.length] }));
+  let criticDay;
+  do { criticDay = 10 + Math.floor(Math.random() * 8); } while (criticDay === typhoonDay);
+  return { forecast: fc, typhoonDay, criticDay, days };
 }
 function save() { if (S) localStorage.setItem('lb_save', JSON.stringify(S)); }
 function load() { try { return JSON.parse(localStorage.getItem('lb_save')); } catch { return null; } }
@@ -43,27 +77,41 @@ const netWorth = () => S.cash + S.savings - S.loan;
 
 // ---------- 每日開始 ----------
 function rollDay() {
-  const r = Math.random();
-  const wlist = ['hot', 'sunny', 'sunny', 'cloudy', 'cloudy', 'rain', 'cold'];
-  S.weather = wlist[Math.floor(r * wlist.length)];
+  if (!S.plan) S.plan = makePlan();
+  S.mods = S.mods || [];
+  S.weather = S.plan.forecast[S.day - 1] || 'sunny';
   S.event = null;
-  if (S.day > 1 && Math.random() < 0.45) {
-    let ev; do { ev = pick(EVENTS); } while (ev.id === S.lastEvent);
-    S.event = ev.id; S.lastEvent = ev.id;
-    if (ev.id === 'typhoon') S.weather = 'rain';
+  if (S.day === S.plan.typhoonDay) S.event = 'typhoon';
+  else if (S.day > 1 && Math.random() < 0.35) {
+    let ev; do { ev = pick(EVENTS); } while (ev.id === S.lastEvent || ev.scheduled);
+    S.event = ev.id;
   }
+  if (S.event) S.lastEvent = S.event;
   const ev = currentEvent();
   for (const p of Object.values(PRODUCTS)) {
-    const m = (ev && ev.cost && ev.cost[p.id]) || 1;
+    const m = ((ev && ev.cost && ev.cost[p.id]) || 1) * modMult('cost', p.id);
     S.costs[p.id] = Math.max(1, Math.round(p.baseCost * (0.85 + Math.random() * 0.3) * m));
   }
   if (ev && ev.rep) S.rep = clamp(S.rep + ev.rep, 0, 100);
   S.todayAds = []; S.quizDone = false; S.opened = false; S.adSpend = 0;
   if (S.boardDays > 0) S.todayAds.push('board');
+  S.pending = (S.plan.days[S.day] || []).map(it => it.kind === 'order' ? { kind: 'order', order: makeOrder() } : { ...it });
   save();
 }
+
+function makeOrder() {
+  const id = pick(unlockedIds());
+  const p = PRODUCTS[id];
+  const qty = 12 + S.day + Math.floor(Math.random() * 8);
+  return { day: S.day, client: pick(ORDER_CLIENTS), product: id, qty, unit: Math.round(p.refPrice * 0.8), bonus: 20 + S.day * 3 };
+}
+
+const modsOf = type => (S.mods || []).filter(m => m.type === type);
+const modMult = (type, id) => modsOf(type).filter(m => !m.id || m.id === id).reduce((a, m) => a * m.mult, 1);
+const modSum = (type, key) => modsOf(type).reduce((a, m) => a + m[key], 0);
+
 const currentEvent = () => EVENTS.find(e => e.id === S.event) || null;
-const refPrice = id => PRODUCTS[id].refPrice * ((currentEvent()?.ref?.[id]) || 1);
+const refPrice = id => PRODUCTS[id].refPrice * ((currentEvent()?.ref?.[id]) || 1) * modMult('ref', id);
 const buyProb = (price, ref) => 0.92 / (1 + Math.exp(4 * (price / ref - 1.1)));
 
 function trafficFor(id) {
@@ -72,6 +120,7 @@ function trafficFor(id) {
   t *= 0.6 + S.rep / 100 * 0.8;
   if (ev && ev.traffic) t *= ev.traffic;
   if (S.upgrades.decor) t *= 1.15;
+  t *= modMult('traffic', id);
   let boost = 0;
   for (const a of S.todayAds) boost += ADS[a].boost;
   return t * (1 + boost);
@@ -81,10 +130,39 @@ function morningNews() {
   const w = WEATHERS[S.weather], ev = currentEvent();
   const lines = [{ who: '新聞', text: `第 ${S.day} 日早晨！今日天氣：${w.name}。${w.desc}` }];
   if (ev) lines.push({ who: '新聞', text: `【${ev.title}】${ev.text}` });
+  if (S.day === S.plan.criticDay) lines.push({ who: '新聞', text: '傳聞今日有著名食評家微服出巡！記得有貨同埋價錢合理。' });
   if (S.boardDays > 0) lines.push({ who: '新聞', text: `你嘅街頭廣告牌仲有 ${S.boardDays} 日。` });
+  const rent = rentFor(S.day);
+  if (S.day > 1 && rent > rentFor(S.day - 1)) lines.push({ who: '老師傅', text: `業主今日起加租，每日舖租變成 ${money(rent)}！固定成本上升，要賺多啲先得。` });
+  const ms = nextMilestone();
+  if (ms && ms.day === S.day && ms.reward) lines.push({ who: '老師傅', text: `今日收舖後會檢查階段目標：淨資產要有 ${money(ms.target)}，做到有 ${money(ms.reward)} 獎金！` });
   if (S.day === GAME_DAYS) lines.push({ who: '老師傅', text: '今日係最後一日喇！好好把握！' });
   Sound.play('dayStart');
-  startDialog(lines);
+  startDialog(lines, showPending);
+}
+
+const nextMilestone = () => MILESTONES.find(m => m.day >= S.day) || null;
+
+function showPending() {
+  if (!S.pending || !S.pending.length) return;
+  panel = 'decision'; panelEl.className = 'panel theme-help no-close';
+  renderPanel(); Sound.play('bell');
+}
+
+function decisionDef(d) {
+  if (d.kind === 'rival') return RIVAL;
+  if (d.kind === 'dilemma') return d.id === 'insurance' ? INSURANCE : DILEMMAS.find(x => x.id === d.id);
+  const o = d.order, p = PRODUCTS[o.product];
+  const total = o.qty * o.unit + o.bonus;
+  return {
+    title: `新訂單：${o.client}`,
+    text: `「${o.client}」想今日訂 <b>${o.qty} ${p.unit}${p.name}</b>，每${p.unit} ${money(o.unit)}，另加獎金 ${money(o.bonus)}，合共 <b>${money(total)}</b>。開舖時要一次過交貨，唔夠貨要賠 ${money(ORDER_PENALTY)} 同埋聲譽 -8。`,
+    lesson: '接訂單即係簽「合約」：收入穩定，但要準備足夠存貨，唔可以違約。',
+    options: [
+      { label: '接單！', order: true, result: `接咗單！記得今日喺街市入夠 ${o.qty} ${p.unit}${p.name}（仲要預埋門市嘅份）。` },
+      { label: '唔接', result: '今次唔接，專心做門市生意。' },
+    ],
+  };
 }
 
 // ---------- 對話 ----------
@@ -143,8 +221,10 @@ function updateHUD() {
   $('#hud-loan').textContent = money(S.loan);
   $('#hud-rep-bar').style.width = S.rep + '%';
   const nw = netWorth();
-  $('#hud-goal').textContent = `${money(nw)} / ${money(GOAL)}`;
-  $('#hud-goal-bar').style.width = clamp(nw / GOAL * 100, 0, 100) + '%';
+  $('#hud-goal').textContent = `${money(nw)} / ${money((nextMilestone() || MILESTONES[MILESTONES.length - 1]).target)}`;
+  const ms = nextMilestone() || MILESTONES[MILESTONES.length - 1];
+  $('#hud-goal-label').textContent = `第${ms.day}日目標`;
+  $('#hud-goal-bar').style.width = clamp(nw / ms.target * 100, 0, 100) + '%';
   $('#btn-music').textContent = Sound.musicOn ? '音樂：開' : '音樂：關';
   $('#btn-sfx').textContent = Sound.sfxOn ? '音效：開' : '音效：關';
 }
@@ -193,6 +273,7 @@ const PANELS = {
       const trend = diff > 0 ? `<span class="up">比平時貴</span>` : diff < 0 ? `<span class="down">比平時平</span>` : `<span>正常價</span>`;
       return `<div class="card">
         <div class="row"><b class="pname" style="--c:${p.color}">${p.name}</b><span>今日入貨價 <b>${money(cost)}</b>/${p.unit} ${trend}</span></div>
+        ${S.order && S.order.product === p.id ? `<div class="row small warn"><span>今日訂單要交 ${S.order.qty} ${p.unit}（另外仲要預門市嘅份）</span></div>` : ''}
         <div class="row small"><span>現有存貨：${S.stock[p.id]} ${p.unit}</span><span>估計今日人流：約 ${Math.round(trafficFor(p.id))} 人</span></div>
         <div class="row qty">
           <button data-act="qty" data-id="${p.id}" data-n="-10">-10</button>
@@ -242,9 +323,16 @@ const PANELS = {
       const list = unlockedIds().map(id => `<li>${PRODUCTS[id].name}：存貨 <b>${S.stock[id]}</b>，售價 <b>${money(S.prices[id])}</b></li>`).join('');
       const totalStock = unlockedIds().reduce((a, id) => a + S.stock[id], 0);
       const ads = S.todayAds.length ? S.todayAds.map(a => ADS[a].name).join('、') : '冇';
-      body = `<p class="lead">準備好就開舖！營業時間 9:00 – 21:00。收舖時要交租 <b>${money(DAILY_RENT)}</b>（固定成本）。</p>
+      const o = S.order;
+      const orderCard = o ? `<div class="card ${S.stock[o.product] >= o.qty ? '' : 'alert'}"><b>今日訂單：${o.client}</b>
+        <div class="row small"><span>開舖時交 ${o.qty} ${PRODUCTS[o.product].unit}${PRODUCTS[o.product].name}，收 ${money(o.qty * o.unit + o.bonus)}</span>
+        <span>${S.stock[o.product] >= o.qty ? '<b class="pos">存貨夠</b>' : `<b class="neg">仲差 ${o.qty - S.stock[o.product]} ${PRODUCTS[o.product].unit}！</b>`}</span></div></div>` : '';
+      const modList = (S.mods || []).map(m => `<span class="chip ${m.type === 'expense' || m.type === 'commission' || m.type === 'repDaily' ? 'bad' : ''}">${m.label}${m.days < 90 ? `（${m.days}日）` : ''}</span>`).join('');
+      body = `<p class="lead">準備好就開舖！營業時間 9:00 – 21:00。收舖時要交租 <b>${money(rentFor(S.day))}</b>（固定成本）。</p>
+        ${orderCard}
         <div class="card"><ul class="checklist">${list}</ul>
-        <div class="row small"><span>今日天氣：${WEATHERS[S.weather].name}</span><span>今日廣告：${ads}</span></div></div>
+        <div class="row small"><span>今日天氣：${WEATHERS[S.weather].name}</span><span>今日廣告：${ads}</span></div>
+        ${modList ? `<div class="chips">${modList}</div>` : ''}</div>
         ${totalStock === 0 ? '<p class="warn">你仲未有存貨！先去「街市批發」入貨啦。</p>' : ''}
         <div class="footer"><span></span><button class="primary big" data-act="open" ${S.opened ? 'disabled' : ''}>開舖！</button></div>`;
     }
@@ -311,7 +399,11 @@ const PANELS = {
         <table class="tbl money">
           ${line('總收入', money(r.totalRevenue), 'pos')}
           ${line('貨品成本（賣出咗嗰啲）', '-' + money(r.cogs))}
-          ${line('舖租（固定成本）', '-' + money(DAILY_RENT))}
+          ${r.order ? line(r.order.ok ? `訂單收入（${r.order.client}）` : `訂單違約金（${r.order.client}）`, (r.order.ok ? '+' : '-') + money(r.order.ok ? r.order.income : ORDER_PENALTY), r.order.ok ? 'pos' : 'neg') : ''}
+          ${line('舖租（固定成本）', '-' + money(r.rent))}
+          ${r.expense ? line('兼職人工', '-' + money(r.expense)) : ''}
+          ${r.commission ? line('外賣平台佣金', '-' + money(r.commission)) : ''}
+          ${r.payout ? line('颱風保險賠償', '+' + money(r.payout), 'pos') : ''}
           ${r.ads ? line('廣告費', '-' + money(r.ads)) : ''}
           ${r.spoil ? line(`存貨損耗（${r.spoilUnits} 件變壞）`, '-' + money(r.spoil)) : ''}
           ${r.interest ? line('貸款利息', '-' + money(r.interest)) : ''}
@@ -320,9 +412,23 @@ const PANELS = {
         </table>
         <div class="row small"><span>客人買唔到（賣晒）：${r.missed} 人</span><span>嫌貴唔買：${r.tooExp} 人</span><span>聲譽 ${r.repDelta >= 0 ? '+' : ''}${r.repDelta}</span></div>
         <div class="tip">${r.tips.map(t => `<p>${t}</p>`).join('')}</div>
+        ${r.critic ? `<div class="result ${r.critic === 'good' ? 'ok' : 'no'}"><b>食評家評語：</b>${r.critic === 'good' ? '「價錢公道，好味！」聲譽 +8' : '「失望！」聲譽 -8'}</div>` : ''}
+        ${r.milestone ? `<div class="result ${r.milestone.hit ? 'ok' : 'no'}"><b>階段目標（第 ${r.milestone.day} 日 ${money(r.milestone.target)}）：</b>${r.milestone.hit ? (r.milestone.reward ? `達成！獎金 +${money(r.milestone.reward)}` : '達成！') : '未達成，要加把勁！'}</div>` : ''}
+        ${S.day < GAME_DAYS ? `<p class="small">明日天氣預報：<b>${WEATHERS[S.plan.forecast[S.day]].name}</b>${S.day + 1 === S.plan.typhoonDay ? '（天文台話可能有颱風！）' : ''}</p>` : ''}
         ${r.emergency ? `<p class="warn">現金唔夠交租，銀行自動借咗 ${money(r.emergency)} 畀你。</p>` : ''}
         <div class="footer"><span>淨資產：<b>${money(netWorth())}</b></span><button class="primary" data-act="nextday">${S.day >= GAME_DAYS ? '睇最終結果' : '下一日'}</button></div>`,
     };
+  },
+
+  decision() {
+    const d = S.pending[0], def = decisionDef(d);
+    if (d.result) {
+      return { title: def.title, html: `<div class="result ok">${d.result}</div>
+        <div class="tip"><b>創業小知識：</b>${def.lesson}</div>
+        <div class="footer"><span></span><button class="primary" data-act="continue">繼續</button></div>` };
+    }
+    const opts = def.options.map((o, i) => `<button data-act="choose" data-i="${i}">${o.label}</button>`).join('');
+    return { title: def.title, html: `<p class="lead">${def.text}</p><p class="small">你而家有現金 ${money(S.cash)}</p><div class="quiz">${opts}</div>` };
   },
 
   help() {
@@ -335,6 +441,13 @@ const PANELS = {
         <li>去<b>我的小店</b>定價，再「開舖營業」。</li>
         <li>可以去<b>廣告公司</b>賣廣告、<b>銀行</b>存錢或借錢。</li>
         <li>每日去<b>創業學堂</b>學一課，答啱有獎金！</li></ol></div>
+        <div class="card"><p><b>挑戰：</b></p><ul>
+        <li><b>階段目標：</b>第 5、10、15 日要達到指定淨資產，做到有獎金。</li>
+        <li><b>訂單：</b>有客人會大量訂貨，要入夠貨，唔夠要賠錢。</li>
+        <li><b>抉擇事件：</b>請兼職、網紅合作、外賣平台、保險……每個決定都有得有失。</li>
+        <li><b>對手同加租：</b>中途會有對手開業，業主亦會加租兩次。</li>
+        <li><b>食評家：</b>某日會有食評家微服出巡，有貨同價錢合理就有好評。</li>
+        <li><b>天氣：</b>每局有 3 日落雨，其中一日打風，收舖報告會預告明日天氣。</li></ul></div>
         <div class="card"><p><b>操作：</b>方向鍵 / WASD 行路，E / 空格 / Enter 入店。手機同滑鼠可以直接㩒想去嘅地方或者間舖。</p></div>
         <div class="card"><p><b>提示：</b></p><ul>${TIPS_GENERAL.map(t => `<li>${t}</li>`).join('')}</ul></div>`,
     };
@@ -449,6 +562,26 @@ const ACTIONS = {
     panelBody.insertAdjacentHTML('afterbegin', `<div class="result ${ok ? 'ok' : 'no'}"><b>${ok ? '答啱！+$20' : '答錯喇！'}</b> 正確答案：${L.options[L.answer]}<br>${L.explain}</div>`);
     save();
   },
+  choose(dd) {
+    const d = S.pending[0], o = decisionDef(d).options[+dd.i];
+    if (o.cash < 0 && S.cash < -o.cash) return toast('現金唔夠！可以去銀行提款或者借錢先。', true);
+    let res = o;
+    if (o.cash) S.cash += o.cash;
+    if (o.gamble) res = Math.random() < o.gamble.p ? o.gamble.win : o.gamble.lose;
+    if (o.rep) S.rep = clamp(S.rep + o.rep, 0, 100);
+    for (const m of res.mods || o.mods || []) S.mods.push({ ...m });
+    if (o.insure) S.insuredUntil = S.day + o.insure - 1;
+    if (o.order) S.order = { ...d.order };
+    if (d.kind === 'rival') S.rival = true;
+    d.result = res.result;
+    Sound.play(o.gamble ? (res === o.gamble.win ? 'levelup' : 'sad') : (o.cash < 0 ? 'buy' : 'select'));
+    renderPanel(); save();
+  },
+  continue() {
+    S.pending.shift();
+    if (S.pending.length) { renderPanel(); Sound.play('select'); return; }
+    panel = null; panelEl.className = 'panel hidden'; updateHUD(); save(); Sound.play('back');
+  },
   help() { panel = 'help'; renderPanel(); Sound.play('select'); },
   nextday() {
     panel = null; panelEl.className = 'panel hidden';
@@ -479,7 +612,8 @@ panelBody.addEventListener('input', e => {
   $('#pb-' + id).style.width = Math.round(buyProb(price, refPrice(id)) * 100) + '%';
   if (Math.random() < 0.5) Sound.play('blip');
 });
-$('#panel-close').addEventListener('click', () => { if (panel !== 'report' && panel !== 'end') closePanel(); });
+const NO_CLOSE = ['report', 'end', 'decision'];
+$('#panel-close').addEventListener('click', () => { if (!NO_CLOSE.includes(panel)) closePanel(); });
 
 // ---------- 營業模擬 ----------
 function startBusiness() {
@@ -501,7 +635,28 @@ function startBusiness() {
       customers.push({ product: id, buys, tooExp, spawn: Math.random() * (buys ? 0.85 : 0.95) });
     }
   }
+  if (S.day === S.plan.criticDay) {
+    const withStock = unlockedIds().filter(id => S.stock[id] > 0);
+    customers.push({ product: pick(withStock.length ? withStock : unlockedIds()), buys: true, tooExp: false, critic: true, spawn: 0.35 });
+  }
   customers.sort((a, b) => a.spawn - b.spawn);
+  if (S.order && S.order.day === S.day) {
+    const o = S.order, p = PRODUCTS[o.product];
+    if (S.stock[o.product] >= o.qty) {
+      const income = o.qty * o.unit + o.bonus;
+      stats.order = { ok: true, client: o.client, income, cogs: o.qty * S.avgCost[o.product] };
+      S.stock[o.product] -= o.qty; S.cash += income;
+      S.rep = clamp(S.rep + 4, 0, 100);
+      floaters.push({ x: 455, y: 150, text: '+' + money(income), color: C.goldL, t: 1.8 });
+      toast(`交咗 ${o.qty} ${p.unit}${p.name} 畀${o.client}！收入 ${money(income)}`);
+      Sound.play('levelup');
+    } else {
+      stats.order = { ok: false, client: o.client };
+      S.cash -= ORDER_PENALTY; S.rep = clamp(S.rep - 8, 0, 100);
+      toast(`${p.name}唔夠貨交畀${o.client}！賠 ${money(ORDER_PENALTY)}，聲譽 -8`, true);
+    }
+    S.order = null;
+  }
   biz = { t: 0, duration: 34, queue: customers, active: [], stats, done: false };
   $('#biz-bar').classList.remove('hidden');
   updateBizBar();
@@ -513,11 +668,12 @@ function spawnCustomer(c) {
     x: fromLeft ? camX - 12 : camX + VW + 12, y: 198 + Math.random() * 34,
     dir: fromLeft ? 'right' : 'left', frame: 0, animT: 0, moving: true,
     pal: randomPalette(), speed: 28 + Math.random() * 18, fromLeft,
-    product: c.product, buys: c.buys, tooExp: c.tooExp,
+    product: c.product, buys: c.buys, tooExp: c.tooExp, critic: c.critic,
     state: (c.buys || c.tooExp) ? 'approach' : 'pass',
     tx: 455 + (Math.random() - 0.5) * 36, wait: 0, bubble: null,
   };
   ch.laneY = ch.y;
+  if (c.critic) { ch.pal = CRITIC_PAL; ch.speed = 30; ch.bubble = { text: '食評家駕到', t: 3 }; }
   ch.exitX = fromLeft ? camX + VW + 20 : camX - 20;
   if (ch.state === 'pass') ch.tx = ch.exitX;
   biz.active.push(ch);
@@ -582,6 +738,13 @@ function updateBusiness(dt) {
 
 function transact(ch) {
   const id = ch.product, st = biz.stats;
+  if (ch.critic) {
+    const good = S.stock[id] > 0 && S.prices[id] <= refPrice(id) * 1.1;
+    st.critic = good ? 'good' : 'bad';
+    S.rep = clamp(S.rep + (good ? 8 : -8), 0, 100);
+    toast(good ? '食評家大讚你間舖！聲譽 +8' : '食評家好失望……聲譽 -8', !good);
+    if (good) Sound.play('levelup');
+  }
   if (S.stock[id] > 0) {
     S.stock[id]--;
     const price = S.prices[id];
@@ -591,7 +754,7 @@ function transact(ch) {
     if (price <= refPrice(id) * 1.05) st.fair++;
     else if (price > refPrice(id) * 1.3) st.gouge++;
     ch.carry = PRODUCTS[id].color;
-    ch.bubble = { text: pick(['好味！', '多謝！', '正！', '再嚟！']), t: 1 };
+    ch.bubble = { text: ch.critic ? (st.critic === 'good' ? '五星推介！' : '太貴喇……') : pick(['好味！', '多謝！', '正！', '再嚟！']), t: ch.critic ? 2 : 1 };
     floaters.push({ x: ch.x, y: ch.y - 26, text: '+' + money(price), color: C.goldL, t: 1.1 });
     Sound.play('sale');
   } else {
@@ -618,7 +781,7 @@ function endBusiness() {
   Sound.play('dayEnd');
   const st = biz.stats;
   const totalRevenue = Object.values(st.revenue).reduce((a, b) => a + b, 0);
-  let cogs = 0;
+  let cogs = st.order && st.order.ok ? st.order.cogs : 0;
   for (const id of unlockedIds()) cogs += st.sold[id] * S.avgCost[id];
   const sold = Object.values(st.sold).reduce((a, b) => a + b, 0);
   // 損耗
@@ -632,17 +795,32 @@ function endBusiness() {
   }
   const interest = Math.round(S.loan * BANK.loanRate);
   const saveInt = Math.round(S.savings * BANK.savingRate);
-  S.cash -= DAILY_RENT + interest;
+  const rent = rentFor(S.day);
+  const expense = modSum('expense', 'amount');
+  const commission = Math.round(totalRevenue * modSum('commission', 'rate'));
+  const payout = S.event === 'typhoon' && S.insuredUntil >= S.day ? INSURANCE_PAYOUT : 0;
+  const orderIncome = st.order ? (st.order.ok ? st.order.income : -ORDER_PENALTY) : 0;
+  S.cash -= rent + interest + expense + commission;
+  S.cash += payout;
   S.savings += saveInt;
   let emergency = 0;
   if (S.cash < 0) { emergency = -S.cash; S.loan += emergency; S.cash = 0; }
   // 聲譽
   let repDelta = st.fair * 0.12 - st.gouge * 0.05 - st.missed * 0.4 - st.tooExp * 0.03;
   if (S.upgrades.decor) repDelta += 1;
+  repDelta += modSum('repDaily', 'amount');
   repDelta = Math.round(clamp(repDelta, -10, 8));
   S.rep = clamp(S.rep + repDelta, 0, 100);
   if (S.boardDays > 0) S.boardDays--;
-  const profit = Math.round(totalRevenue - cogs - DAILY_RENT - S.adSpend - spoil - interest + saveInt);
+  const profit = Math.round(totalRevenue + orderIncome - cogs - rent - S.adSpend - spoil - interest + saveInt - expense - commission + payout);
+  for (const m of S.mods) m.days--;
+  S.mods = S.mods.filter(m => m.days > 0);
+  const msDef = MILESTONES.find(m => m.day === S.day);
+  let milestone = null;
+  if (msDef) {
+    milestone = { ...msDef, hit: netWorth() >= msDef.target };
+    if (milestone.hit && msDef.reward) { S.cash += msDef.reward; Sound.play('levelup'); }
+  }
   S.totalSold += sold;
   S.history.push({ day: S.day, profit, revenue: totalRevenue });
   // 分析提示
@@ -652,20 +830,25 @@ function endBusiness() {
   if (st.tooExp >= 5) tips.push(`有 ${st.tooExp} 個客人嫌貴，試下調低少少價錢？`);
   if (spoilUnits >= 5) tips.push(`有 ${spoilUnits} 件貨賣唔晒變壞咗。估準啲需求，或者買「大雪櫃」減少損耗。`);
   if (S.adSpend > 0) tips.push(`今日用咗 ${money(S.adSpend)} 賣廣告，想想帶嚟嘅利潤值唔值？`);
+  if (st.order && !st.order.ok) tips.push('今日訂單唔夠貨交，違約要賠錢又損聲譽。接單前要計好存貨！');
+  if (commission > 0) tips.push(`今日畀咗 ${money(commission)} 平台佣金。多咗嘅客，賺嘅錢夠唔夠抵銷佣金？`);
+  if (S.event === 'typhoon') tips.push(payout ? `打風收到保險賠償 ${money(payout)}，呢個就係保險嘅作用！` : '打風日生意好差。下次可以考慮買保險，或者少啲入貨。');
+  if (rentFor(S.day + 1) > rent && S.day < GAME_DAYS) tips.push(`業主通知：由明日起每日舖租加到 ${money(rentFor(S.day + 1))}！`);
   if (S.loan > 0) tips.push(`你仲欠銀行 ${money(S.loan)}，每日利息 ${money(S.loan * BANK.loanRate)}。有錢記得還！`);
   if (profit > 0 && tips.length === 0) tips.push('做得好！今日有利潤，繼續保持！');
   if (!tips.length) tips.push(pick(TIPS_GENERAL));
-  biz.report = { sold: st.sold, revenue: st.revenue, totalRevenue, cogs: Math.round(cogs), ads: S.adSpend, spoil: Math.round(spoil), spoilUnits, interest, saveInt, profit, missed: st.missed, tooExp: st.tooExp, repDelta, tips, emergency };
+  biz.report = { sold: st.sold, revenue: st.revenue, totalRevenue, cogs: Math.round(cogs), ads: S.adSpend, spoil: Math.round(spoil), spoilUnits, interest, saveInt, profit, missed: st.missed, tooExp: st.tooExp, repDelta, tips, emergency,
+    rent, expense, commission, payout, order: st.order, critic: st.critic, milestone };
   speed = 1;
   save(); updateHUD();
   if (profit > 0) Sound.play('coin');
-  panel = 'report'; panelEl.className = 'panel theme-shop'; renderPanel();
+  panel = 'report'; panelEl.className = 'panel theme-shop no-close'; renderPanel();
 }
 
 function endGame() {
   mode = 'end';
   Sound.play('win');
-  panel = 'end'; panelEl.className = 'panel theme-school'; renderPanel();
+  panel = 'end'; panelEl.className = 'panel theme-school no-close'; renderPanel();
 }
 
 // ---------- 主角移動 ----------
@@ -725,7 +908,7 @@ window.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT' && e.target.type === 'text') return;
   keys[e.code] = true;
   if (e.code === 'KeyE' || e.code === 'Space' || e.code === 'Enter') interact();
-  if (e.code === 'Escape' && panel && panel !== 'report' && panel !== 'end') closePanel();
+  if (e.code === 'Escape' && panel && !NO_CLOSE.includes(panel)) closePanel();
 });
 window.addEventListener('keyup', e => { keys[e.code] = false; });
 window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
@@ -787,6 +970,7 @@ function startGame(fresh) {
       { who: '老師傅', text: `你有 ${GAME_DAYS} 日時間，由 ${money(START_CASH)} 開始經營你嘅小店「${S.shopName}」。目標係淨資產去到 ${money(GOAL)}！` },
       { who: '老師傅', text: '每日先去左邊嘅「街市批發」入貨，再返「我的小店」定價同開舖。' },
       { who: '老師傅', text: '仲可以去右邊嘅「銀行」存錢借錢、「廣告公司」宣傳，同埋每日嚟我度學一課！' },
+      { who: '老師傅', text: '做生意唔會一帆風順：會有訂單、對手、加租同各種抉擇，仲有階段目標要達成！' },
       { who: '老師傅', text: '用方向鍵或者㩒畫面行路，行到門口按 E 或者㩒「入去」就得。加油！' },
     ], morningNews);
   } else if (S.opened) {

@@ -155,3 +155,7 @@ input[type=range] { width: 100%; accent-color: #d8442f; margin: 0.4em 0 0.1em; h
 .title-form label { display: flex; flex-direction: column; font-size: 0.85em; font-weight: bold; gap: 0.2em; text-align: left; }
 .title-form input { font: inherit; font-size: 1.1em; padding: 0.25em 0.4em; border: 0.15em solid #2a1e1e; background: #fffbec; width: 8em; -webkit-user-select: text; user-select: text; }
 .title-btns { display: flex; gap: 0.6em; justify-content: center; flex-wrap: wrap; }
+.no-close #panel-close { display: none; }
+.card.alert { border-color: #c8342a; background: #fff0ec; }
+.chip.bad { background: #c8342a; }
+.row.small.warn { color: #c8342a; font-weight: bold; }
