@@ -7,7 +7,8 @@
 ## 重做
 
 ```bash
-cd /workspace/slides/a101-cursor-18-trial-roFtnJ
+# From the repository root (this checkout)
+cd slides/a101-cursor-18-trial-roFtnJ
 python3 -m pip install python-pptx
 python3 generate_a101.py
 python3 validate_a101.py
